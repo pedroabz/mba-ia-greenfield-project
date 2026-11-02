@@ -1,8 +1,16 @@
-import { QueryFailedError } from 'typeorm';
+import { QueryFailedError, type DataSource } from 'typeorm';
 import { ChannelsService } from './channels.service';
 import { Channel } from './entities/channel.entity';
 
-function makeManager(overrides: Record<string, jest.Mock> = {}): any {
+/** The slice of EntityManager ChannelsService actually calls, all as jest mocks. */
+interface ManagerStub {
+  findOne: jest.Mock;
+  create: jest.Mock;
+  save: jest.Mock;
+  query?: jest.Mock;
+}
+
+function makeManager(overrides: Partial<ManagerStub> = {}): ManagerStub {
   return {
     findOne: jest.fn(),
     create: jest.fn(),
@@ -23,17 +31,32 @@ function makeChannel(nickname: string): Channel {
   return c;
 }
 
+/** The pg driver fields TypeORM re-exposes on QueryFailedError. */
+interface PgDriverError {
+  code: string;
+  detail: string;
+}
+
 function makeUniqueError(): QueryFailedError {
-  const err = new QueryFailedError('INSERT', [], new Error()) as any;
-  err.code = '23505';
-  err.detail = 'Key (nickname)=(abc) already exists.';
+  const err = new QueryFailedError('INSERT', [], new Error());
+  Object.assign<QueryFailedError, PgDriverError>(err, {
+    code: '23505',
+    detail: 'Key (nickname)=(abc) already exists.',
+  });
   return err;
 }
 
-function makeDataSource(manager: any): any {
+/**
+ * Minimal DataSource whose `transaction` just invokes the callback with the stub.
+ * Cast at the boundary because the real `transaction` is an overloaded signature a
+ * single jest.fn cannot satisfy structurally.
+ */
+function makeDataSource(manager: ManagerStub): DataSource {
   return {
-    transaction: jest.fn((cb: (manager: any) => Promise<any>) => cb(manager)),
-  };
+    transaction: jest.fn((cb: (m: ManagerStub) => Promise<unknown>) =>
+      cb(manager),
+    ),
+  } as unknown as DataSource;
 }
 
 describe('ChannelsService', () => {

@@ -1,8 +1,12 @@
 services:
   nestjs-api:
-    build: 
+    build:
       context: .
       dockerfile: Dockerfile.dev
+      # Explicit target is load-bearing: Dockerfile.dev is multi-stage and the
+      # last stage carries ffmpeg. Without this the API would build the worker
+      # image (per phase-03-videos/TD-08).
+      target: base
     ports:
       - 3000:3000
     volumes:
@@ -12,6 +16,21 @@ services:
         condition: service_healthy
       mailpit:
         condition: service_started
+      minio:
+        condition: service_healthy
+
+  video-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+      target: worker
+    volumes:
+      - .:/home/node/app
+    depends_on:
+      db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
 
   db:
     image: postgres:17
@@ -33,4 +52,59 @@ services:
       - "1025:1025"
       - "8025:8025"
 
+  # S3-compatible object storage for local development; replaced by managed S3 in
+  # production. The upstream `minio/minio` image is no longer distributed, so this
+  # is the pinned Bitnami-legacy build (per phase-03-videos/TD-01).
+  minio:
+    image: bitnamilegacy/minio:2025.7.23
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      - MINIO_ROOT_USER=streamtube
+      - MINIO_ROOT_PASSWORD=streamtube
+    volumes:
+      - minio-data:/bitnami/minio/data
+    healthcheck:
+      test:
+        ["CMD-SHELL", "curl -fsS http://localhost:9000/minio/health/live || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
 
+  # One-shot bucket bootstrap. Creates the two buckets (per phase-03-videos/TD-01
+  # revision, TD-05 revision). Idempotent — safe to re-run.
+  #
+  # NOTE — the abort-incomplete-multipart lifecycle rule that TD-04 asked for is
+  # NOT applied here, because this MinIO build does not support it. Verified at
+  # SI-03.1.2 against both `mc ilm import` and `aws s3api
+  # put-bucket-lifecycle-configuration`: a rule whose only action is
+  # AbortIncompleteMultipartUpload is rejected with "XML ... did not validate
+  # against our published schema" for every Filter shape (absent / {} /
+  # {Prefix:""} / legacy rule-level Prefix), and when combined with an Expiration
+  # action the server accepts the request but silently drops the Abort clause.
+  #
+  # The cleanup requirement does not disappear — it moves to TD-04's second
+  # mechanism: the `draft-reaper` queue job enumerates stale uploads via
+  # ListMultipartUploads (filtering on the `Initiated` timestamp) and removes them
+  # via AbortMultipartUpload. Both APIs were verified working against this build.
+  minio-bootstrap:
+    image: bitnamilegacy/minio-client:2025.7.21
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"
+        for bucket in streamtube-videos streamtube-thumbnails; do
+          mc mb --ignore-existing "local/$$bucket"
+          echo "bootstrap: $$bucket ready"
+        done
+    environment:
+      - MINIO_ROOT_USER=streamtube
+      - MINIO_ROOT_PASSWORD=streamtube
+
+volumes:
+  minio-data:

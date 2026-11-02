@@ -34,6 +34,59 @@ docker compose exec nestjs-api npm run start:dev
 Services:
 - `nestjs-api` — NestJS API, port `3000`
 - `db` — PostgreSQL 17, port `5432`, database `streamtube`, user/password `streamtube`
+- `mailpit` — SMTP capture, SMTP `1025`, web UI `8025`
+- `minio` — S3-compatible object storage, S3 API `9000`, console `9001`, user/password `streamtube`
+- `minio-bootstrap` — one-shot sidecar creating the `streamtube-videos` and `streamtube-thumbnails` buckets; exits 0 and is idempotent
+- `video-worker` — background video processing (FFmpeg); no HTTP listener
+
+## Videos module (Phase 03)
+
+`VideosModule` owns the video domain. Seven endpoints, all under `/videos`:
+
+| Endpoint | Auth | Purpose |
+|---|---|---|
+| `POST /videos` | owner | Pre-registers the video as a `draft` and returns the server-authoritative `uploadKey` + `part_size_bytes` |
+| `POST /videos/:id/upload/sign` | owner | Signs **one** S3 operation; the `key` in the body is untrusted and re-checked against the draft every time |
+| `POST /videos/:id/upload-complete` | owner | `HeadObject` integrity check, then `draft → processing` + enqueue in one transaction |
+| `GET /videos/:slug` | public (owner-only when not `ready`) | Polling surface; serves `404` rather than `403` to hide a draft's existence |
+| `POST /videos/:slug/reprocess` | owner | `error → processing` + re-enqueue, same transactional pattern |
+| `GET /videos/:slug/stream` | public | `206 Partial Content` range streaming |
+| `GET /videos/:slug/download` | public | Same handler, plus `Content-Disposition: attachment` |
+
+Status cycle: `draft → processing → ready | error`. Publication is **not** in this enum — `visibility` / `published_at` is Phase 04's orthogonal axis.
+
+**No video bytes ever pass through the API on upload.** The client PUTs directly to object storage with presigned URLs; the API only signs and verifies. Delivery is the opposite — the API *does* serve the bytes, pushing the byte range down to storage rather than buffering the object.
+
+**The worker is a separate container with no HTTP listener.** `src/main.worker.ts` boots `WorkerModule` via `createApplicationContext`, so a multi-minute FFmpeg run cannot occupy the API's event loop. Run it with `npm run start:worker:dev` (or `start:worker:prod` against `dist/`). `WorkerModule` must declare the **whole entity relation graph** (`User`, `Channel`, `Video`), not just `Video` — TypeORM resolves inverse relation sides at initialization and the container fails to boot otherwise.
+
+### Running the video test suites
+
+ffmpeg/ffprobe exist **only** in the `video-worker` image, so the suites under `src/worker/` must run there:
+
+```bash
+docker compose exec video-worker npx jest --runInBand src/worker/
+```
+
+`video-worker` is a superset of `nestjs-api` (same code, same `node_modules`, plus the binaries), so it is also the simplest place to run the **whole** suite in one go:
+
+```bash
+docker compose exec video-worker npm test -- --runInBand
+docker compose exec video-worker npm run test:e2e
+```
+
+## Video Infrastructure — accepted constraints
+
+Three deliberate constraints introduced by Phase 03. They are documented here because each is a deviation a future reader would otherwise mistake for a bug.
+
+**1. The MinIO image is frozen and receives no security patches.** `compose.yaml` pins `bitnamilegacy/minio:2025.7.23`. The upstream `minio/minio` repository is **no longer distributed on Docker Hub** (the community edition was archived 2026-04-25), so `image: minio/minio` does not pull at all. `bitnamilegacy` is the pullable mirror with real version tags, frozen at the July 2025 release. Accepted because storage is a local-development-only dependency here — production uses managed S3, which is why `StorageModule` is written against the S3 API rather than a MinIO client.
+
+**2. The `pgboss` schema is created at application boot, not by a migration.** `pg-boss` owns and versions its own schema and creates it during `boss.start()`. It is intentionally **absent** from `src/database/migrations/`, so `npm run migration:run` alone does **not** provision a working queue — the application (or the worker) must have booted at least once. This is a conscious exception to the project's versioned-migration discipline: vendoring a third party's internal DDL into our migration history would rot on the first library upgrade.
+
+**3. This MinIO build does not support `AbortIncompleteMultipartUpload`, so orphaned uploads are reaped by a job, not by a bucket lifecycle rule.** Verified at SI-03.1.2 against both `mc ilm import` and `aws s3api put-bucket-lifecycle-configuration`: a lifecycle rule whose only action is `AbortIncompleteMultipartUpload` is rejected with *"XML … did not validate against our published schema"* for every `Filter` shape (absent, `{}`, `{Prefix:""}`, and legacy rule-level `Prefix`); when combined with an `Expiration` action the server accepts the request but **silently drops the Abort clause**. The cleanup requirement therefore moves to the `draft-reaper` queue job, which enumerates stale uploads via `ListMultipartUploads` (filtering on each upload's `Initiated` timestamp) and removes them via `AbortMultipartUpload`. Both APIs are fully supported by this build and were verified end-to-end.
+
+**4. This MinIO build also ignores the `Prefix` parameter of `ListMultipartUploads`.** The value is echoed back in the response and the result set comes back **empty**, even when matching uploads exist (verified: the same uploads are returned when the parameter is omitted). Any code that filters in-flight multipart uploads server-side is therefore a silent no-op — list without `Prefix` and filter client-side. `src/storage/storage.test-harness.ts`'s `listOwnUploads` is the single place that does this; `StorageService.listStaleUploads` is unaffected because the reaper sweeps the whole bucket by design.
+
+**FFmpeg version.** The `video-worker` stage installs Debian's `ffmpeg` package; the resolved version is **`5.1.9-0+deb12u1`** (ffmpeg and ffprobe both). It is present **only** in the worker image — `Dockerfile.dev` is multi-stage and `compose.yaml` declares an explicit `target:` per service (`base` for `nestjs-api`, `worker` for `video-worker`). Dropping that `target:` would silently hand ffmpeg to the API, because Docker builds the last stage by default.
 
 All verification and teardown commands run on the **host machine**:
 
@@ -56,21 +109,32 @@ docker compose down
 
 **Strict rule:** every `npm`, `npx`, `node`, `tsc`, and test command runs **inside the container**, never on the host. Running on the host causes env-var divergence (`DB_HOST` resolves to `localhost` instead of the Compose service), uses a different Node version, and produces results that do not reflect what runs in CI/prod.
 
-### Container-only commands (always prefix with `docker compose exec nestjs-api`)
+### Container-only commands
+
+**Which container matters for tests.** From Phase 03 on, the suites under `src/worker/`
+need `ffmpeg`/`ffprobe`, which exist **only** in the `video-worker` image. Running the
+full suite in `nestjs-api` does not merely skip them — it fails slowly (their polling
+loops burn minutes before giving up). `video-worker` is a superset of `nestjs-api`
+(same code, same `node_modules`, plus the binaries), so it is the container to use for
+anything that runs tests.
 
 ```bash
-npm run start:dev                        # Dev server with hot-reload
-npm run build                            # Compile to dist/
-npm run start:prod                       # Run compiled build
+# Tests — run in video-worker
+docker compose exec video-worker npm test -- --runInBand        # unit + integration
+docker compose exec video-worker npm run test:e2e               # e2e (maxWorkers: 1 in its config)
+docker compose exec video-worker npm run test:cov -- --runInBand # coverage
+docker compose exec video-worker npx jest --runInBand src/worker/ # just the worker suites
 
-npm test                                 # Unit tests
-npm run test:watch                       # Unit tests in watch mode
-npm run test:cov                         # Coverage report
-npm run test:e2e                         # End-to-end tests (always with --runInBand)
+# Everything else — either container; nestjs-api by convention
+docker compose exec nestjs-api npm run start:dev    # Dev server with hot-reload
+docker compose exec nestjs-api npm run build        # Compile to dist/
+docker compose exec nestjs-api npm run start:prod   # Run compiled build
+docker compose exec nestjs-api npx tsc --noEmit     # Type-check (required before done)
+docker compose exec nestjs-api npm run lint         # ESLint with auto-fix
+docker compose exec nestjs-api npm run format       # Prettier formatting
 
-npx tsc --noEmit                         # Type-check (required before declaring a task done)
-npm run lint                             # ESLint with auto-fix
-npm run format                           # Prettier formatting
+# The worker process itself (no HTTP listener)
+docker compose exec video-worker npm run start:worker:dev
 ```
 
 ### Host-only commands (Docker / connectivity probes)
@@ -87,11 +151,24 @@ curl http://localhost:3000
 Integration and e2e suites share a single test database. They **must** be run with `--runInBand`:
 
 ```bash
-docker compose exec nestjs-api npm test -- --runInBand
-docker compose exec nestjs-api npm run test:e2e   # already configured
+docker compose exec video-worker npm test -- --runInBand
+docker compose exec video-worker npm run test:e2e   # config pins maxWorkers: 1
 ```
 
 Parallel execution causes FK violations, deadlocks, and cross-suite contamination because suites truncate or seed shared tables concurrently.
+
+`video-worker` rather than `nestjs-api`, for the reason given under "Container-only commands": the `src/worker/` suites need the FFmpeg binaries. Running the full suite in `nestjs-api` yields **11 failures** (measured), and they fail slowly because their polling loops have to time out first.
+
+`npm test` needs `--runInBand` passed explicitly; `test:e2e` does not, because `test/jest-e2e.json` sets `maxWorkers: 1`. That was added in Phase 03 — before it, the e2e suites ran in parallel workers against one database and truncated each other's rows, which stayed invisible while only `app` and `swagger` existed and broke the moment table-touching suites were added.
+
+**From Phase 03 on, the integration and e2e suites also require `minio` to be up**, not just `db`. They exercise the real object storage and the real `pg-boss` queue through `src/storage/storage.test-harness.ts` and `src/test/queue.ts` (the same precedent `src/test/mailpit.ts` set — drive the real service, do not simulate it). The storage harness lives inside `src/storage/` rather than under `src/test/` on purpose: it needs the AWS SDK, and TD-02 forbids importing `@aws-sdk/` anywhere outside that directory. Keeping it there lets the encapsulation test stay a single unqualified assertion with no exemption list. Bring the stack up with `docker compose up -d` before running them; a suite against a stopped `minio` fails on connection refused, not on a clear message.
+
+Two cross-suite hazards these helpers exist to prevent:
+
+- **Object collisions.** Suites share one storage service, so `createTestStorage('<suite>')` scopes every key under a unique per-suite prefix and `cleanup()` removes objects **and** in-flight multipart uploads under it. Never write to a bare key like `videos/<id>/original.mp4` from a test.
+- **Leftover jobs.** `pg-boss`'s own `deleteQueuedJobs` deletes only jobs in the *queued* state and leaves *active* ones behind. Use `QueueService.drain` (which calls `deleteAllJobs`) or the `drainQueues` helper, in `beforeEach`.
+
+Also beware of concurrent DDL in test setup: `DROP TABLE ... CASCADE` takes an AccessExclusive lock on the target **and** on every table referencing it, so issuing several through one pool with `Promise.all` deadlocks and **hangs** the suite instead of failing it. Drop tables sequentially. Dropping a table does not drop its columns' enum types either — enumerate them from `pg_type` rather than listing them by name, or a crashed run leaves an orphan type that makes the next `CREATE TYPE` fail.
 
 During active development, run only the tests related to the file being changed (`npm test -- path/to/file.spec.ts`). Before declaring a task done, run the full suite — see the global `CLAUDE.md` → "Definition of Done (Technical)".
 
