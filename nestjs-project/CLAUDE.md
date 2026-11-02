@@ -111,12 +111,24 @@ docker compose down
 
 ### Container-only commands
 
-**Which container matters for tests.** From Phase 03 on, the suites under `src/worker/`
-need `ffmpeg`/`ffprobe`, which exist **only** in the `video-worker` image. Running the
-full suite in `nestjs-api` does not merely skip them — it fails slowly (their polling
-loops burn minutes before giving up). `video-worker` is a superset of `nestjs-api`
-(same code, same `node_modules`, plus the binaries), so it is the container to use for
-anything that runs tests.
+**Which container matters for tests.** From Phase 03 on, two suites under
+`src/worker/` drive the real `ffmpeg`/`ffprobe`, which exist **only** in the
+`video-worker` image (`Dockerfile.dev` is multi-stage and `compose.yaml` picks a
+`target:` per service — deliberate, per TD-08).
+
+Those two suites **skip themselves** when the binaries are absent, so `npm test` is
+green in either container:
+
+| Container | Result |
+|---|---|
+| `nestjs-api` | 335 passed, **20 skipped** (2 suites) — the skip names the reason |
+| `video-worker` | **355 passed, 0 skipped** |
+
+Run the Definition of Done in `video-worker`, where nothing skips — that is what
+keeps the skip from quietly eroding coverage. The gate lives in
+`src/worker/ffmpeg-available.ts`, which probes the binaries synchronously (it has to
+resolve before Jest collects the suite). The e2e suites need no binaries and are
+fully green in both containers.
 
 ```bash
 # Tests — run in video-worker
@@ -157,7 +169,7 @@ docker compose exec video-worker npm run test:e2e   # config pins maxWorkers: 1
 
 Parallel execution causes FK violations, deadlocks, and cross-suite contamination because suites truncate or seed shared tables concurrently.
 
-`video-worker` rather than `nestjs-api`, for the reason given under "Container-only commands": the `src/worker/` suites need the FFmpeg binaries. Running the full suite in `nestjs-api` yields **11 failures** (measured), and they fail slowly because their polling loops have to time out first.
+`video-worker` rather than `nestjs-api` because it is the only container where **nothing skips** — see the table under "Container-only commands". Both containers are green; only the worker runs the FFmpeg suites for real, so that is where the Definition of Done has to be measured.
 
 `npm test` needs `--runInBand` passed explicitly; `test:e2e` does not, because `test/jest-e2e.json` sets `maxWorkers: 1`. That was added in Phase 03 — before it, the e2e suites ran in parallel workers against one database and truncated each other's rows, which stayed invisible while only `app` and `swagger` existed and broke the moment table-touching suites were added.
 
