@@ -21,3 +21,20 @@ const EXTENSION_BY_CONTENT_TYPE: Record<string, string> = {
 
 export const extensionForContentType = (contentType: string): string =>
   EXTENSION_BY_CONTENT_TYPE[contentType.toLowerCase().trim()] ?? '.bin';
+
+/**
+ * Rate limit for `POST /videos/{id}/upload/sign`, sized from the phase requirement
+ * rather than inherited.
+ *
+ * The inherited global limit is 10 requests / 60s (ThrottlerGuard registered as
+ * APP_GUARD in AuthModule). Signing happens **once per part**, so a 10 GiB upload
+ * needs 1,280 part signatures plus create, complete and two ListParts pages —
+ * 1,284 calls. Under the global limit the largest upload that completes at all is
+ * 80 MiB, and a 10 GiB one would spend ~128 minutes purely waiting on 429s.
+ * Verified empirically: a real 1,280-part upload died at part 10.
+ *
+ * Not `@SkipThrottle`: the endpoint mints signed URLs, so an unbounded signing
+ * oracle is worse than a generously bounded one. The limit admits a full 10 GiB
+ * upload in one burst and nothing more.
+ */
+export const SIGN_RATE_LIMIT = { limit: 2000, ttl: 60_000 } as const;

@@ -11,7 +11,7 @@ import {
   Res,
   StreamableFile,
 } from '@nestjs/common';
-import { SkipThrottle } from '@nestjs/throttler';
+import { SkipThrottle, Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
 import {
   ApiBearerAuth,
@@ -30,6 +30,7 @@ import { CreateVideoDto } from './dto/create-video.dto';
 import { SignUploadDto } from './dto/sign-upload.dto';
 import { VideoResponseDto, VideoStatusDto } from './dto/video-response.dto';
 import { SlugParamPipe } from './pipes/slug-param.pipe';
+import { SIGN_RATE_LIMIT } from './videos.constants';
 import {
   VideosService,
   type CreatedDraft,
@@ -82,6 +83,9 @@ export class VideosController {
   }
 
   @Post(':id/upload/sign')
+  // Signing is once PER PART, so the inherited 10 req/60s limit caps uploads at
+  // 80 MiB. See SIGN_RATE_LIMIT for the sizing and the empirical failure.
+  @Throttle({ default: SIGN_RATE_LIMIT })
   @ApiBearerAuth('access-token')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({

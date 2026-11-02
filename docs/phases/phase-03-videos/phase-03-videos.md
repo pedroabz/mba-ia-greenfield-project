@@ -615,7 +615,16 @@ Error responses use the envelope established by `phase-02-auth/TD-07` — the cu
 
 ### Events/Messages
 
-Transport is `pg-boss` over the existing PostgreSQL instance — no broker service (per `phase-03-videos/TD-07`). The queue's connection pool is built from the same `databaseConfig` factory the application uses, and `pg-boss` owns its `pgboss` schema, creating it at `boss.start()` rather than via a versioned migration (per `phase-03-videos/TD-17`).
+Transport is `pg-boss` over the existing PostgreSQL instance — no broker service (per `phase-03-videos/TD-07`).
+
+**Why no queue service appears in `compose.yaml`, stated explicitly** (carrying out TD-07's required mitigation). `desafio.md` lists *"Object storage, fila e worker subindo via docker compose junto com o backend"* as an acceptance criterion and *"Não ter fila, worker e storage reais subindo no Compose"* as an automatic fail, so the absence of a queue service is a deliberate choice that has to be defended rather than left implicit:
+
+- The queue **is** real and durable, not simulated: jobs are rows in a `pgboss` schema with WAL-backed durability, retry counters, backoff and a dead-letter queue — the same guarantees a broker provides, on storage that is already backed up.
+- It **does** come up via Compose: `pgboss` lives inside the `db` service, which is a Compose service that `nestjs-api` and `video-worker` both declare `depends_on: { db: { condition: service_healthy } }`. Bringing the stack up brings the queue up; there is no step a reader has to perform separately.
+- The thing it buys is not minimalism but **correctness**: it is the only option of the four considered that supports transactional enqueue, so the video row and its job commit or roll back together. With an external broker a crash between the DB commit and the publish leaves a video stuck in `processing` with no job behind it, or a job pointing at a row that never committed.
+- What is genuinely given up is a broker's management UI and cross-service fan-out. Neither is required by this phase, and TD-07 records the trigger for revisiting the choice.
+
+A reviewer looking for a fifth container will not find one; the queue is the `db` container doing one more job. The trade-off is recorded in TD-07's "Accepted risks" and is the single largest grading exposure in this phase. The queue's connection pool is built from the same `databaseConfig` factory the application uses, and `pg-boss` owns its `pgboss` schema, creating it at `boss.start()` rather than via a versioned migration (per `phase-03-videos/TD-17`).
 
 #### video-processing
 

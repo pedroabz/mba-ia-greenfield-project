@@ -109,21 +109,32 @@ docker compose down
 
 **Strict rule:** every `npm`, `npx`, `node`, `tsc`, and test command runs **inside the container**, never on the host. Running on the host causes env-var divergence (`DB_HOST` resolves to `localhost` instead of the Compose service), uses a different Node version, and produces results that do not reflect what runs in CI/prod.
 
-### Container-only commands (always prefix with `docker compose exec nestjs-api`)
+### Container-only commands
+
+**Which container matters for tests.** From Phase 03 on, the suites under `src/worker/`
+need `ffmpeg`/`ffprobe`, which exist **only** in the `video-worker` image. Running the
+full suite in `nestjs-api` does not merely skip them — it fails slowly (their polling
+loops burn minutes before giving up). `video-worker` is a superset of `nestjs-api`
+(same code, same `node_modules`, plus the binaries), so it is the container to use for
+anything that runs tests.
 
 ```bash
-npm run start:dev                        # Dev server with hot-reload
-npm run build                            # Compile to dist/
-npm run start:prod                       # Run compiled build
+# Tests — run in video-worker
+docker compose exec video-worker npm test -- --runInBand        # unit + integration
+docker compose exec video-worker npm run test:e2e               # e2e (maxWorkers: 1 in its config)
+docker compose exec video-worker npm run test:cov -- --runInBand # coverage
+docker compose exec video-worker npx jest --runInBand src/worker/ # just the worker suites
 
-npm test                                 # Unit tests
-npm run test:watch                       # Unit tests in watch mode
-npm run test:cov                         # Coverage report
-npm run test:e2e                         # End-to-end tests (always with --runInBand)
+# Everything else — either container; nestjs-api by convention
+docker compose exec nestjs-api npm run start:dev    # Dev server with hot-reload
+docker compose exec nestjs-api npm run build        # Compile to dist/
+docker compose exec nestjs-api npm run start:prod   # Run compiled build
+docker compose exec nestjs-api npx tsc --noEmit     # Type-check (required before done)
+docker compose exec nestjs-api npm run lint         # ESLint with auto-fix
+docker compose exec nestjs-api npm run format       # Prettier formatting
 
-npx tsc --noEmit                         # Type-check (required before declaring a task done)
-npm run lint                             # ESLint with auto-fix
-npm run format                           # Prettier formatting
+# The worker process itself (no HTTP listener)
+docker compose exec video-worker npm run start:worker:dev
 ```
 
 ### Host-only commands (Docker / connectivity probes)
@@ -140,11 +151,15 @@ curl http://localhost:3000
 Integration and e2e suites share a single test database. They **must** be run with `--runInBand`:
 
 ```bash
-docker compose exec nestjs-api npm test -- --runInBand
-docker compose exec nestjs-api npm run test:e2e   # already configured
+docker compose exec video-worker npm test -- --runInBand
+docker compose exec video-worker npm run test:e2e   # config pins maxWorkers: 1
 ```
 
 Parallel execution causes FK violations, deadlocks, and cross-suite contamination because suites truncate or seed shared tables concurrently.
+
+`video-worker` rather than `nestjs-api`, for the reason given under "Container-only commands": the `src/worker/` suites need the FFmpeg binaries. Running the full suite in `nestjs-api` yields **11 failures** (measured), and they fail slowly because their polling loops have to time out first.
+
+`npm test` needs `--runInBand` passed explicitly; `test:e2e` does not, because `test/jest-e2e.json` sets `maxWorkers: 1`. That was added in Phase 03 — before it, the e2e suites ran in parallel workers against one database and truncated each other's rows, which stayed invisible while only `app` and `swagger` existed and broke the moment table-touching suites were added.
 
 **From Phase 03 on, the integration and e2e suites also require `minio` to be up**, not just `db`. They exercise the real object storage and the real `pg-boss` queue through `src/storage/storage.test-harness.ts` and `src/test/queue.ts` (the same precedent `src/test/mailpit.ts` set — drive the real service, do not simulate it). The storage harness lives inside `src/storage/` rather than under `src/test/` on purpose: it needs the AWS SDK, and TD-02 forbids importing `@aws-sdk/` anywhere outside that directory. Keeping it there lets the encapsulation test stay a single unqualified assertion with no exemption list. Bring the stack up with `docker compose up -d` before running them; a suite against a stopped `minio` fails on connection refused, not on a clear message.
 

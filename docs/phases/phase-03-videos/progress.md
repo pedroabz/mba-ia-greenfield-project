@@ -3,6 +3,41 @@
 **Status:** completed
 **SIs:** 10/10 completed
 
+## Verificação de 10 GiB real e auditoria contra o desafio.md
+
+Feita depois de a fase já estar "pronta", porque a pergunta "como você testou o upload de 10 GB?" expôs que eu **não** havia testado: minha evidência era aritmética de part size num teste unitário, um upload multipart real de **51 KB** e um arquivo de 7,9 MB pelo worker. Nada disso é 10 GB. Encontrou **um defeito grave**, **uma violação do contrato de sufixos** e **duas inconsistências de documentação**.
+
+**Defeito grave — o rate limit tornava o upload de 10 GB impossível.** `POST /videos/{id}/upload/sign` herdava o limite global de 10 req/60 s, mas a assinatura é **uma por parte**: 10 GiB = 1.280 partes + create + complete + 2 páginas de `ListParts` = **1.284 chamadas**. Na prática o maior upload que completava era de **80 MiB**, e um de 10 GiB passaria ~128 minutos só esperando 429. Comprovado: a primeira tentativa real morreu na parte 10 com `ThrottlerException`. É a mesma classe do bug de streaming/polling, mas no caminho de **upload** — e pior, porque quebra a capacidade principal da fase. Corrigido com `@Throttle({ default: SIGN_RATE_LIMIT })` (2000/60 s, dimensionado a partir das 1.284 chamadas) em vez de `@SkipThrottle`: o endpoint emite URLs assinadas, e um oráculo de assinatura ilimitado é pior que um generosamente limitado. Dois testes e2e de regressão.
+
+**Upload de 10 GiB verificado de verdade, contra a stack no ar:**
+
+| Medida | Resultado |
+|---|---|
+| Partes enviadas | 1.280 × 8 MiB, em 44 s |
+| `ListParts` paginado | página 1 = 1.000, `IsTruncated=true`, marker=1000, página 2 = 280, total 1.280 |
+| `CompleteMultipartUpload` | HTTP 200 |
+| Objeto no storage | `ContentLength` = 10.737.418.240 = exatamente 10,000 GiB |
+| Checagem de integridade | `declared_size_bytes` = 10737418240 confere; `upload-complete` → `processing` |
+| API durante o upload | **169/169 respostas 200**, zero falhas |
+| RSS da API | 169,5 → 252,1 MB (crescimento de *request churn*: 0,8% do payload, não proporcional a ele) |
+| RSS do worker baixando 10 GiB | **118 MB** — prova que o download é streaming para disco, não buffer |
+| Temp do worker após o job | removido pelo `finally` |
+
+Isso também exercitou pela primeira vez a paginação de `ListParts` acima de 1.000 partes, que TD-03 previu e que nenhum teste anterior alcançava (precisa de >8 GiB).
+
+**Observação, não corrigida de propósito:** um worker morto com `SIGKILL` no meio de um job deixa o diretório temporário para trás — o `finally` não roda. Comprovei isso: achei um `/tmp/video-*` de 7,9 MB de um worker que eu havia matado antes; com um vídeo de 10 GB seria 10 GB de disco vazado. Uma varredura de `/tmp/video-*` no bootstrap do worker resolveria. Está **fora** do plano e das ACs, então fica registrado como recomendação em vez de implementado por conta própria.
+
+**Violação do contrato de sufixos, corrigida.** `desafio.md` repete o contrato (`*.spec.ts` = unit) como critério de aceite, e `nestjs-project/CLAUDE.md` é explícito: *"A test that constructs a TypeOrmModule.forRoot, opens a connection, or hits the db service must be `*.integration-spec.ts`, never `*.spec.ts`."* Cinco specs de módulo abriam conexão — `videos.module` e `worker.module` (meus) e `auth`/`users`/`channels.module` (herdados, que foram o precedente que eu segui). Todos renomeados para `.integration-spec.ts`. Nenhum `*.spec.ts` toca mais o banco.
+
+**Duas inconsistências de `CLAUDE.md` — que são critério de reprova automática** (*"Documentação que cite arquivos ou comportamentos inexistentes reprova"*):
+
+- A seção de comandos mandava rodar `npm test` em `nestjs-api`. Medi: **11 testes falham** lá (os que dependem de ffmpeg) e falham **devagar**, porque os loops de polling precisam estourar primeiro. Reescrita para `video-worker`, com a razão explícita.
+- A seção "Test execution" repetia a mesma instrução errada; corrigida e complementada com o motivo de `test:e2e` não precisar de `--runInBand` (o config fixa `maxWorkers: 1`).
+
+Varredura automática: todos os caminhos de arquivo citados entre backticks nos dois `CLAUDE.md` existem.
+
+**Argumento de visibilidade da fila no Compose, agora explícito no plano.** TD-07 registrou como risco aceito que *nenhum serviço de fila apareceria no `compose.yaml`* e mandou **argumentar isso no plano**; o plano só dizia "no broker service (per TD-07)". Como `desafio.md` lista *"Não ter fila, worker e storage reais subindo no Compose"* como reprova automática, a seção Events/Messages passou a defender o ponto: a fila é real e durável (linhas num schema `pgboss`, com retry, backoff e DLQ, em storage com WAL e backup), **sobe via Compose** (vive no serviço `db`, de que `nestjs-api` e `video-worker` dependem com `condition: service_healthy`), e o que ela compra não é minimalismo mas **correção** — é a única das quatro opções com enqueue transacional. É a maior exposição de avaliação da fase e está registrada como tal.
+
 ## Limpeza da dívida de lint herdada (fase 02)
 
 `npm run lint` passou a sair **0, com zero erros e zero warnings**. Eram 133 erros + 39 warnings em 6 arquivos da fase 02. A maior parte era `any` vazando de APIs de teste, e foi corrigida **tipando**, não silenciando:

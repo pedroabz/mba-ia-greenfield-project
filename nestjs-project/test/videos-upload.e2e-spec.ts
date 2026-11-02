@@ -19,6 +19,7 @@ import {
   destroyTestStorageClient,
 } from '../src/storage/storage.test-harness';
 import { User } from '../src/users/entities/user.entity';
+import { VideosController } from '../src/videos/videos.controller';
 import { Video, VideoStatus } from '../src/videos/entities/video.entity';
 
 /** See the note in videos-read.e2e-spec.ts — `supertest` types `res.body` as `any`. */
@@ -273,6 +274,44 @@ describe('Videos upload (e2e)', () => {
         .expect(200);
 
       expect((listParts.body as SignedBody).url).toBeDefined();
+    });
+  });
+
+  describe('2b. Rate limiting da assinatura', () => {
+    it('permite muito mais de 10 assinaturas — uma por parte', async () => {
+      const draft = await createDraft(ownerToken);
+
+      // The inherited global limit is 10 req/60s. Signing happens once PER PART, so
+      // under that limit the largest upload that completes is 80 MiB and a 10 GiB
+      // one needs 1,284 calls. This was found by actually attempting a 10 GiB
+      // upload: the client died at part 10 with a 429.
+      const codes: number[] = [];
+      for (let part = 1; part <= 40; part++) {
+        const res = await request(app.getHttpServer())
+          .post(`/videos/${draft.id}/upload/sign`)
+          .set('Authorization', `Bearer ${ownerToken}`)
+          .send({
+            method: 'PUT',
+            key: draft.uploadKey,
+            upload_id: 'upload-1',
+            part_number: part,
+          });
+        codes.push(res.status);
+      }
+
+      expect(codes.filter((c) => c === 429)).toHaveLength(0);
+      expect(codes.every((c) => c === 200)).toBe(true);
+    }, 60000);
+
+    it('mantem o limite herdado na criacao de rascunho', () => {
+      // Only the signing route is widened; creating drafts is once per video and
+      // stays on the inherited limit.
+      const limits = Reflect.getMetadata(
+        'THROTTLER:LIMIT',
+        VideosController.prototype.create,
+      ) as unknown;
+
+      expect(limits).toBeUndefined();
     });
   });
 
