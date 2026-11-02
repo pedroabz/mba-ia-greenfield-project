@@ -1,4 +1,7 @@
-FROM node:25.6.0-slim
+# Base image, shared by the API. Deliberately free of media tooling — only the
+# worker needs ffmpeg, and carrying it here would inflate every API replica
+# (per phase-03-videos/TD-08, TD-09).
+FROM node:25.6.0-slim AS base
 
 RUN apt update && apt install -y procps curl
 
@@ -6,4 +9,17 @@ WORKDIR /home/node/app
 
 USER node
 
-CMD [ "tail", "-f", "/dev/null" ] 
+CMD [ "tail", "-f", "/dev/null" ]
+
+# Worker image: base + ffmpeg/ffprobe. Only the `video-worker` service builds
+# this stage, so the API image never carries the media toolchain.
+#
+# NOTE: compose services MUST declare an explicit `target:`. Without it Docker
+# builds the LAST stage, which would hand ffmpeg to the API as well.
+FROM base AS worker
+
+USER root
+RUN apt update && apt install -y ffmpeg && rm -rf /var/lib/apt/lists/*
+USER node
+
+CMD [ "tail", "-f", "/dev/null" ]
