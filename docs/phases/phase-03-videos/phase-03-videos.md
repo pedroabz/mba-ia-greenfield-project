@@ -729,7 +729,7 @@ SI-03.1.1 (root — libs instaladas + contrato de env)
 - [x] Backend tests pass (`cd nestjs-project && docker compose exec nestjs-api npm test -- --runInBand`)
 - [x] E2E tests pass (`cd nestjs-project && docker compose exec nestjs-api npm run test:e2e`)
 - [x] Type checks pass (`cd nestjs-project && docker compose exec nestjs-api npx tsc --noEmit` — exit code 0)
-- [ ] **Lint does NOT pass — dívida pré-existente, não introduzida por esta fase.** Baseline medido num worktree de `HEAD` antes da fase 03: **190 problemas / 150 erros**. Depois da fase: **172 / 133**, com os 67 arquivos desta fase em **zero**. Os 133 erros restantes estão todos em arquivos da fase 02 não tocados (`no-unsafe-member-access` em `res.body` do supertest, `unbound-method` em mocks). Limpar isso é uma tarefa separada — veja `progress.md` → SI-03.7.
+- [x] Lint passes (`cd nestjs-project && docker compose exec nestjs-api npm run lint` — exit 0, zero errors e zero warnings)
 - [x] OpenAPI regenerado (`cd nestjs-project && docker compose exec nestjs-api npm run openapi:export` — os 7 endpoints desta fase presentes)
 
 **Documentação:**

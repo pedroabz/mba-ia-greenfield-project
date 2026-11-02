@@ -25,6 +25,23 @@ export default tseslint.config(
     },
   },
   {
+    // Test files only. `@typescript-eslint/unbound-method` fires on every
+    // `expect(mock.method)` — the standard Jest assertion form, which cannot be
+    // written any other way. typescript-eslint's own guidance is to replace the
+    // base rule with eslint-plugin-jest's `jest/unbound-method` when using Jest;
+    // absent that plugin, disabling it here is the equivalent. Production code
+    // keeps the rule.
+    files: [
+      '**/*.spec.ts',
+      '**/*.integration-spec.ts',
+      '**/*.e2e-spec.ts',
+      '**/*.test-harness.ts',
+    ],
+    rules: {
+      '@typescript-eslint/unbound-method': 'off',
+    },
+  },
+  {
     rules: {
       '@typescript-eslint/no-explicit-any': 'off',
       '@typescript-eslint/no-floating-promises': 'warn',

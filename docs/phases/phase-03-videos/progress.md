@@ -3,6 +3,20 @@
 **Status:** completed
 **SIs:** 10/10 completed
 
+## Limpeza da dívida de lint herdada (fase 02)
+
+`npm run lint` passou a sair **0, com zero erros e zero warnings**. Eram 133 erros + 39 warnings em 6 arquivos da fase 02. A maior parte era `any` vazando de APIs de teste, e foi corrigida **tipando**, não silenciando:
+
+- **`test/auth.e2e-spec.ts` (48 → 0).** `res.body` é `any` no supertest. Introduzi um acessor tipado (`body(res)`), o mesmo padrão que as suítes de vídeo já usavam. De quebra isso expôs um buraco real: o helper `registerConfirmAndLogin` devolvia `access_token`/`refresh_token` possivelmente `undefined`, o que apareceria muito depois como um 401 opaco em qualquer teste que o usasse — agora falha alto, no ponto de origem.
+- **`src/auth/auth.service.spec.ts` (77 → 0).** Trinta e quatro `as any` em fixtures trocados por `as unknown as <TipoReal>`. **Isso encontrou dois bugs de verdade nos próprios testes:** dois sites alimentavam `verificationTokenRepository.createQueryBuilder` com um mock tipado como `SelectQueryBuilder<RefreshToken>` — o `as any` escondia a troca de entidade.
+- **`src/test/mailpit.ts` + `src/mail/mail.service.integration-spec.ts` (18 → 0).** O helper devolvia `any[]`/`any`. Tipei as duas respostas da API do Mailpit com os campos efetivamente lidos; as chaves JSON do Mailpit são capitalizadas (`To[0].Address`, `HTML`), exatamente o tipo de coisa que erra calado.
+- **`src/channels/channels.service.spec.ts` (20 → 0).** Mock de `EntityManager`/`DataSource` tipado, e o erro do driver pg descrito por interface em vez de `as any`.
+- **Os dois specs de filtro (9 → 0).** `expect.any()` é declarado como `any` pelo Jest, então usá-lo direto como propriedade de objeto literal dispara `no-unsafe-assignment`. Resolvido com **um** alias tipado por arquivo (`const anyString = expect.any(String) as unknown as string`) em vez de cinco supressões.
+
+Uma única mudança de configuração, escopada a arquivos de teste: `@typescript-eslint/unbound-method` desligado em `*.spec.ts` / `*.integration-spec.ts` / `*.e2e-spec.ts` / `*.test-harness.ts`. A regra dispara em **todo** `expect(mock.metodo)` — a forma padrão de asserção do Jest, que não tem como ser escrita de outro jeito; a própria orientação do typescript-eslint é substituir a regra base pela `jest/unbound-method` do eslint-plugin-jest quando se usa Jest. **Código de produção mantém a regra** — verificado empiricamente com um arquivo-sonda: em `src/probe-unbound.ts` a regra acusa, em `src/probe-unbound.spec.ts` não.
+
+Nada foi desligado globalmente e nenhum `eslint-disable` inline foi adicionado.
+
 ## Auditoria das 57 acceptance criteria
 
 Varredura explícita de **todas** as 57 ACs dos 10 SIs, feita depois de declarar a fase pronta — a pergunta "você validou cada uma delas?" expôs que eu havia validado os deliverables e as 9 capacidades, mas não percorrido as ACs uma a uma. A varredura encontrou **1 bug real**, **2 ACs sub-asseridas** e **1 AC que não vale literalmente**.
@@ -134,7 +148,7 @@ As 52 ACs restantes foram confirmadas: 1–13, 15–19, 21–24, 26–34, 36, 38
   - O `reprocess` **não** zera `processing_attempts` — é a trilha de auditoria de quantas vezes o vídeo já falhou. Apenas `processing_error` é limpo. Há teste afirmando `processing_attempts === 3` depois do re-enqueue.
   - Conflito aparente entre AC #5/#6 e o Error Catalog resolvido como em SI-03.5: estado não-`error` → `409 VIDEO_INVALID_STATE`, com teste afirmando que **nada** é enfileirado nesse caminho.
   - AC #7 verificada: `npm run openapi:export` emite os 5 endpoints de vídeo, com `security` presente nos 4 autenticados e **ausente** no `GET /videos/{slug}` público, mais o schema `VideoResponseDto`. O `@ApiBearerAuth('access-token')` ficou por método em vez de na classe justamente porque a regra de controllers proíbe anunciar auth numa rota `@Public()`.
-  - **Dívida de lint pré-existente, não introduzida por esta fase.** Medi o baseline num worktree de `HEAD`: **190 problemas / 150 erros** já antes da fase 03. Deixei meus 64 arquivos com **zero** problemas e o projeto fechou em **172 / 133** — ou seja, abaixo do baseline. Os 133 erros restantes estão todos em arquivos da fase 02 que não toquei (`no-unsafe-member-access` em `res.body` do supertest, `unbound-method` em mocks). **`npm run lint` continua falhando por essa dívida herdada** e limpá-la é uma tarefa separada.
+  - **Dívida de lint pré-existente — zerada depois, não deixada como tarefa separada.** Medi o baseline num worktree de `HEAD`: **190 problemas / 150 erros** já antes da fase 03, e primeiro declarei a fase pronta deixando `npm run lint` falhando, por tratar a dívida como fora de escopo. Isso estava **errado**: a Definition of Done do projeto lista `npm run lint` como gate e manda corrigir a causa antes de declarar conclusão. Um gate que falha e é reportado com honestidade continua sendo um gate que falha. Hoje: **exit 0, zero erros e zero warnings** — ver a seção de lint abaixo.
 
 ### SI-03.8 — Implementar streaming por range e download
 - **Status:** completed
