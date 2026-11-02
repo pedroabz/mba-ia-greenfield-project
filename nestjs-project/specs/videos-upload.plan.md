@@ -86,7 +86,7 @@ O endpoint de assinatura é a superfície de segurança desta fase: ele trata a 
 
 ### 3. Conclusão do upload e integridade
 
-**Setup:** herda o Setup do grupo 2. Para os cenários que precisam de objeto gravado, usar o helper de storage de teste (`src/test/storage.ts`) para gravar um objeto na `uploadKey` do rascunho com um tamanho controlado.
+**Setup:** herda o Setup do grupo 2. Para os cenários que precisam de objeto gravado, usar o helper de storage de teste (`src/storage/storage.test-harness.ts`) para gravar um objeto na `uploadKey` do rascunho com um tamanho controlado.
 
 #### 3.1. rejeita-conclusao-sem-objeto-no-storage
 

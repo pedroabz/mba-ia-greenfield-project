@@ -23,7 +23,7 @@ See `docs/diagrams/software-arch.mermaid` for the full diagram. Key containers:
 - **Video Worker** (FFmpeg) → consumes jobs from queue, processes videos, updates DB and storage
 - **Database** (PostgreSQL) → users, channels, videos, comments, likes
 - **Object Storage** (S3/MinIO) → video files and thumbnails
-- **Message Queue** (TBD) → video processing job queue
+- **Message Queue** (`pg-boss` on the existing PostgreSQL) → video processing job queue. There is deliberately **no broker service**: the queue is a durable `pgboss` schema inside the `db` container, which is what makes the enqueue transactional — a video row and its job commit or roll back together (see `docs/decisions/technical-decisions-phase-03-videos.md` TD-07, TD-17)
 - **Email Service** (SMTP) → account confirmation and password recovery
 
 ## Docker Networking

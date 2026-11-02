@@ -693,46 +693,46 @@ SI-03.1.1 (root — libs instaladas + contrato de env)
 
 ## Deliverables
 
-- [ ] SI-03.1.1 — Infra: instalar bibliotecas e estender o contrato de env
-- [ ] SI-03.1.2 — Infra: subir storage, bootstrap de buckets e worker no Compose
-- [ ] SI-03.2 — Criar StorageModule sobre o AWS SDK v3
-- [ ] SI-03.3 — Criar entidade Video e migration
-- [ ] SI-03.4 — Criar QueueModule sobre pg-boss
-- [ ] SI-03.5 — Implementar o handshake de upload (rascunho, assinatura, conclusão)
-- [ ] SI-03.6 — Criar o worker de vídeo e o FfmpegService
-- [ ] SI-03.7 — Implementar leitura de status e reprocessamento
-- [ ] SI-03.8 — Implementar streaming por range e download
-- [ ] SI-03.9 — Montar a infraestrutura de testes de storage, fila e FFmpeg
+- [x] SI-03.1.1 — Infra: instalar bibliotecas e estender o contrato de env
+- [x] SI-03.1.2 — Infra: subir storage, bootstrap de buckets e worker no Compose
+- [x] SI-03.2 — Criar StorageModule sobre o AWS SDK v3
+- [x] SI-03.3 — Criar entidade Video e migration
+- [x] SI-03.4 — Criar QueueModule sobre pg-boss
+- [x] SI-03.5 — Implementar o handshake de upload (rascunho, assinatura, conclusão)
+- [x] SI-03.6 — Criar o worker de vídeo e o FfmpegService
+- [x] SI-03.7 — Implementar leitura de status e reprocessamento
+- [x] SI-03.8 — Implementar streaming por range e download
+- [x] SI-03.9 — Montar a infraestrutura de testes de storage, fila e FFmpeg
 
 **Capacidades da fase** _(uma linha por bullet de `docs/project-plan.md`)_:
 
-- [ ] Serviço de armazenamento de arquivos (vídeos e thumbnails) — dois buckets provisionados e acessíveis via `StorageModule`
-- [ ] Serviço de processamento em segundo plano (filas) — `video-processing` e `draft-reaper` operando sobre `pg-boss`
-- [ ] Upload de vídeos com suporte a arquivos de até 10GB sem impacto na performance — bytes vão direto do cliente ao storage, sem passar pela API
-- [ ] Pré-cadastro automático do vídeo como rascunho ao iniciar o upload — linha em `draft` criada antes do primeiro byte
-- [ ] Processamento automático do vídeo após upload (extração de duração e metadados) — sete campos persistidos pelo worker
-- [ ] Geração automática de thumbnail a partir de um frame do vídeo — objeto gravado no bucket de thumbnails
-- [ ] URL única por vídeo, sem conflito com outros vídeos — `slug` `nanoid(11)` em coluna `UNIQUE`
-- [ ] Reprodução via streaming (sem necessidade de download completo) — `206 Partial Content` com `Content-Range`
-- [ ] Download do vídeo pelo usuário — mesmo handler com `Content-Disposition: attachment`
+- [x] Serviço de armazenamento de arquivos (vídeos e thumbnails) — dois buckets provisionados e acessíveis via `StorageModule`
+- [x] Serviço de processamento em segundo plano (filas) — `video-processing` e `draft-reaper` operando sobre `pg-boss`
+- [x] Upload de vídeos com suporte a arquivos de até 10GB sem impacto na performance — bytes vão direto do cliente ao storage, sem passar pela API
+- [x] Pré-cadastro automático do vídeo como rascunho ao iniciar o upload — linha em `draft` criada antes do primeiro byte
+- [x] Processamento automático do vídeo após upload (extração de duração e metadados) — sete campos persistidos pelo worker
+- [x] Geração automática de thumbnail a partir de um frame do vídeo — objeto gravado no bucket de thumbnails
+- [x] URL única por vídeo, sem conflito com outros vídeos — `slug` `nanoid(11)` em coluna `UNIQUE`
+- [x] Reprodução via streaming (sem necessidade de download completo) — `206 Partial Content` com `Content-Range`
+- [x] Download do vídeo pelo usuário — mesmo handler com `Content-Disposition: attachment`
 
 **Test specs a autorar antes de implementar** _(placeholders `**Test Specs:** _pending_` em 3 SIs)_:
 
-- [ ] Spec de `SI-03.5` (handshake de upload) autorado via `/plan-test-specs phase-03-videos`
-- [ ] Spec de `SI-03.7` (leitura de status e reprocess) autorado via `/plan-test-specs phase-03-videos`
-- [ ] Spec de `SI-03.8` (streaming e download) autorado via `/plan-test-specs phase-03-videos`
+- [x] Spec de `SI-03.5` (handshake de upload) autorado via `/plan-test-specs phase-03-videos`
+- [x] Spec de `SI-03.7` (leitura de status e reprocess) autorado via `/plan-test-specs phase-03-videos`
+- [x] Spec de `SI-03.8` (streaming e download) autorado via `/plan-test-specs phase-03-videos`
 
 **Full test suites** _(comandos conforme `nestjs-project/CLAUDE.md` — todo `npm`/`npx` roda dentro do container)_:
 
-- [ ] Infraestrutura no ar (`cd nestjs-project && docker compose up -d` — todos os serviços em `running`, storage e `db` em `healthy`)
-- [ ] Migrations aplicadas (`cd nestjs-project && docker compose exec nestjs-api npm run migration:run`)
-- [ ] Backend tests pass (`cd nestjs-project && docker compose exec nestjs-api npm test -- --runInBand`)
-- [ ] E2E tests pass (`cd nestjs-project && docker compose exec nestjs-api npm run test:e2e`)
-- [ ] Type checks pass (`cd nestjs-project && docker compose exec nestjs-api npx tsc --noEmit` — exit code 0)
-- [ ] Lint passes (`cd nestjs-project && docker compose exec nestjs-api npm run lint`)
-- [ ] OpenAPI regenerado (`cd nestjs-project && docker compose exec nestjs-api npm run openapi:export` — os 7 endpoints desta fase presentes)
+- [x] Infraestrutura no ar (`cd nestjs-project && docker compose up -d` — todos os serviços em `running`, storage e `db` em `healthy`)
+- [x] Migrations aplicadas (`cd nestjs-project && docker compose exec nestjs-api npm run migration:run`)
+- [x] Backend tests pass (`cd nestjs-project && docker compose exec nestjs-api npm test -- --runInBand`)
+- [x] E2E tests pass (`cd nestjs-project && docker compose exec nestjs-api npm run test:e2e`)
+- [x] Type checks pass (`cd nestjs-project && docker compose exec nestjs-api npx tsc --noEmit` — exit code 0)
+- [ ] **Lint does NOT pass — dívida pré-existente, não introduzida por esta fase.** Baseline medido num worktree de `HEAD` antes da fase 03: **190 problemas / 150 erros**. Depois da fase: **172 / 133**, com os 67 arquivos desta fase em **zero**. Os 133 erros restantes estão todos em arquivos da fase 02 não tocados (`no-unsafe-member-access` em `res.body` do supertest, `unbound-method` em mocks). Limpar isso é uma tarefa separada — veja `progress.md` → SI-03.7.
+- [x] OpenAPI regenerado (`cd nestjs-project && docker compose exec nestjs-api npm run openapi:export` — os 7 endpoints desta fase presentes)
 
 **Documentação:**
 
-- [ ] `nestjs-project/CLAUDE.md` atualizado com a seção de vídeos: módulo, endpoints, fila/worker e storage, mais as duas constrições aceitas (imagem de storage congelada; schema `pgboss` criado no boot e ausente de `src/database/migrations/`)
-- [ ] `CLAUDE.md` da raiz atualizado — a fila deixa de ser **TBD** e passa a `pg-boss` sobre PostgreSQL
+- [x] `nestjs-project/CLAUDE.md` atualizado com a seção de vídeos: módulo, endpoints, fila/worker e storage, mais as duas constrições aceitas (imagem de storage congelada; schema `pgboss` criado no boot e ausente de `src/database/migrations/`)
+- [x] `CLAUDE.md` da raiz atualizado — a fila deixa de ser **TBD** e passa a `pg-boss` sobre PostgreSQL

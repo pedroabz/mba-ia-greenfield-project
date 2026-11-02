@@ -4,7 +4,7 @@ name: phase-03-videos
 libs:
   "@aws-sdk/client-s3": "3.1161.0"
   "@aws-sdk/s3-request-presigner": "3.1161.0"
-  pg-boss: "12.38.0"
+  pg-boss: "11.0.2"
   nanoid: "3.3.11"
   pg: "^8.20.0"
 sources_mtime:
@@ -75,17 +75,29 @@ Two consequences that are easy to get wrong:
 
 ### pg-boss
 
-**Version:** `12.38.0`
+**Version:** `11.0.2` _(fallback applied — see the spike result below)_
 
 **Decided by:** `phase-03-videos/TD-07` and `TD-17`
-**Module format:** ⚠️ **ESM-only** — `"type": "module"`, engines `node >= 22.12.0`.
+**Module format:** CommonJS (no `type` field) — safe. **This is the fallback pin; `12.38.0` was tried first and rejected at SI-03.1.1.**
 **History:** first released 2016-03-18, 305 releases — the most mature option in the Postgres-queue category.
 
-> **Spike this before committing.** The engines floor of exactly `22.12.0` is the Node version that enabled `require(esm)` unflagged, which reads as deliberate support for CommonJS consumers, and the runtime here is Node 25.6. But verify an actual `import { PgBoss } from 'pg-boss'` compiles under `module: nodenext` **and** runs under `ts-jest` before building on it. **Fallback:** pin `11.0.2` (2025-09-29, CommonJS, `node >= 22`) — one major behind, but it removes the question entirely.
+> **Spike result (SI-03.1.1, 2026-11-01) — `12.38.0` REJECTED, `11.0.2` adopted.** `pg-boss@12` is `"type": "module"` with **no `exports` map** (only `main`), so it *type-checks* fine under `module: nodenext` — `tsc --noEmit` exits 0. But it **fails at runtime under `ts-jest`**:
+>
+> ```
+> node_modules/pg-boss/dist/index.js:1
+> import assert, { AssertionError } from 'node:assert';
+> SyntaxError: Cannot use import statement outside a module
+> ```
+>
+> Migrating Jest to ESM would touch all 27 existing test files, so the scoped fix is this pin. `11.0.2` (2025-09-29) is CommonJS and passes both halves of the spike (tsc exit 0; jest 1/1 passing).
+>
+> **API difference that matters:** v11 declares `export = PgBoss`, so the import is the **default** form — `import PgBoss from 'pg-boss'` (works via the project's `esModuleInterop: true`). The v12 **named** form `import { PgBoss } from 'pg-boss'` does **not** compile against v11. Revisit v12 only if the project migrates Jest to ESM.
 
 **API surface — the whole thing is six calls:**
 
 ```ts
+import PgBoss from 'pg-boss'   // default import — v11 uses `export = PgBoss`
+
 const boss = new PgBoss({ /* connection from databaseConfig, per TD-17 */ })
 boss.on('error', err => logger.error(err))        // it emits, it does not throw
 await boss.start()                                 // creates + migrates the `pgboss` schema
@@ -97,6 +109,13 @@ await boss.send('video-processing', { videoId }, { /* opts */ })
 await boss.work('video-processing', async ([job]) => { /* ... */ })   // NOTE: array
 await boss.stop()
 ```
+
+**Option set actually available in v11** (verified against `node_modules/pg-boss/types.d.ts`, not the published docs for the latest line):
+
+- `DatabaseOptions`: `host`, `port`, `database`, `user`, `password`, `schema` (default `pgboss`), `max`, `application_name`, `connectionString`, `ssl`, `db` (BYODB).
+- `MaintenanceOptions`: `supervise`, `migrate`, `superviseIntervalSeconds`, `maintenanceIntervalSeconds`, …
+- `StopOptions`: `graceful`, `timeout`, `close`, `wait`.
+- **`useListenNotify` does NOT exist in v11.** It appears in the docs for the current line but has no entry in 11.0.2's types, so the low-latency LISTEN/NOTIFY pickup is unavailable on this pin — v11 polls at `pollingIntervalSeconds` (default 2s). Immaterial for this workload (one heavy job per upload), but the TD-07 pro-column's "~3ms pickup" claim does not apply to the installed version.
 
 **Four behaviours that bite if unknown:**
 
@@ -163,8 +182,8 @@ These are not packages, so they carry no `Libraries:` field — but they are ver
 docker compose exec nestjs-api npm install \
   @aws-sdk/client-s3@3.1161.0 \
   @aws-sdk/s3-request-presigner@3.1161.0 \
-  pg-boss@12.38.0 \
+  pg-boss@11.0.2 \
   nanoid@3.3.11
 ```
 
-Run it **inside the container** per `nestjs-project/CLAUDE.md` — a host `npm install` on macOS breaks native binaries in the Linux container. If the `pg-boss` ESM spike fails, substitute `pg-boss@11.0.2`.
+Run it **inside the container** per `nestjs-project/CLAUDE.md` — a host `npm install` on macOS breaks native binaries in the Linux container. The `pg-boss` pin is already the CommonJS fallback — the ESM spike on `12.38.0` failed at SI-03.1.1.

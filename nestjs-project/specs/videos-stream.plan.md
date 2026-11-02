@@ -20,7 +20,7 @@ A autorização é verificada **antes** de abrir o stream: o vídeo precisa esta
 
 ### 1. Streaming por range
 
-**Setup:** `beforeEach` truncar `videos`, `channels` e `users`; bootstrap do módulo de teste NestJS reproduzindo a config global de `main.ts`; criar um usuário com canal. Gravar no bucket de vídeos, via o helper de storage de teste (`src/test/storage.ts`), um objeto de tamanho conhecido — a fixture `src/test/fixtures/sample.mp4` serve — e semear um vídeo `ready` apontando para aquela key.
+**Setup:** `beforeEach` truncar `videos`, `channels` e `users`; bootstrap do módulo de teste NestJS reproduzindo a config global de `main.ts`; criar um usuário com canal. Gravar no bucket de vídeos, via o helper de storage de teste (`src/storage/storage.test-harness.ts`), um objeto de tamanho conhecido — a fixture `src/test/fixtures/sample.mp4` serve — e semear um vídeo `ready` apontando para aquela key.
 
 #### 1.1. serve-range-parcial-com-206
 
